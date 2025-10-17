@@ -32,7 +32,7 @@ jobs:
         python main.py
         
     - name: Upload generated files
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: generated-build-files
         path: golden_dataset/KMPWithTests/generated/
@@ -67,7 +67,7 @@ jobs:
       uses: android-actions/setup-android@v3
 
     - name: AVD cache
-      uses: actions/cache@v3
+      uses: actions/cache@v4
       id: avd-cache
       with:
         path: |
@@ -157,7 +157,7 @@ jobs:
           fi
         
     - name: Upload Android test logs
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       if: always()
       with:
         name: android-test-logs
