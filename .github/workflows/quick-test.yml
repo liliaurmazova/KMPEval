@@ -4,6 +4,7 @@ on:
   workflow_dispatch: 
   
 jobs:
+  
   quick-test:
     runs-on: ubuntu-latest
     
@@ -26,7 +27,7 @@ jobs:
         echo "Testing project structure..."
         ls -la
         echo "Testing Python imports..."
-        python -c "from evaluators.model_evaluator import compare_results; print('Imports work!')"
+        python -c "from evaluators.model_evaluator import compare_results; print('Imports work!')" 
         echo "Testing file paths..."
         python -c "
         import os

@@ -8,6 +8,7 @@ on:
   workflow_dispatch:  
 
 jobs:
+  
   generate-and-test:
     runs-on: ubuntu-latest
     
@@ -27,7 +28,7 @@ jobs:
         
     - name: Generate build files
       env:
-        ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }} 
       run: |
         python main.py
         
@@ -161,6 +162,26 @@ jobs:
             cat /tmp/app_errors.log || echo "No error logs"
             exit 1
           fi
+        
+    - name: Ensure logs are copied from emulator
+      if: always()
+      run: |
+        echo "📋 Ensuring logs are available for upload..."
+        
+        # Create empty log files if they don't exist
+        touch app_errors.log app_logs.log
+        
+        # Try to get logs from adb if available (emulator might still be running)
+        if command -v adb >/dev/null 2>&1; then
+          echo "ADB available, collecting fresh logs..."
+          adb logcat -d -s "AndroidRuntime:E" -s "System.err:E" > app_errors.log 2>/dev/null || echo "Could not collect error logs"
+          adb logcat -d | grep "kmpwithtests" > app_logs.log 2>/dev/null || echo "Could not collect app logs"
+        fi
+        
+        # Show log files status
+        ls -la app_*.log || echo "No log files found"
+        echo "Error log size: $(wc -l < app_errors.log || echo 0) lines"
+        echo "App log size: $(wc -l < app_logs.log || echo 0) lines"
         
     - name: Upload Android test logs
       uses: actions/upload-artifact@v4

@@ -1,6 +1,7 @@
 name: Android APK Test Only
 
 on:
+  
   workflow_dispatch:  
     inputs:
       apk_path:
@@ -190,9 +191,33 @@ jobs:
           echo "📋 Collecting logs..."
           adb logcat -d > full_logcat.log
           adb logcat -d | grep "$PACKAGE_NAME" > app_specific.log
-          adb logcat -d -s "AndroidRuntime:E" -s "System.err:E" > error_logs.log
+          adb logcat -d -s "AndroidRuntime:E" -s "System.err:E" > error_logs.log 
           
           echo "🎉 Test completed successfully!"
+
+    - name: Ensure logs are copied from emulator  
+      if: always()
+      run: |
+        echo "📋 Ensuring logs are available for upload..."
+        
+        # Create empty log files if they don't exist
+        touch install_output.log start_output.log full_logcat.log app_specific.log error_logs.log
+        
+        # Try to get logs from adb if available (emulator might still be running)
+        if command -v adb >/dev/null 2>&1; then
+          echo "ADB available, collecting fresh logs..."
+          adb logcat -d > full_logcat.log 2>/dev/null || echo "Could not collect full logcat"
+          adb logcat -d | grep "kmpwithtests" > app_specific.log 2>/dev/null || echo "Could not collect app logs"
+          adb logcat -d -s "AndroidRuntime:E" -s "System.err:E" > error_logs.log 2>/dev/null || echo "Could not collect error logs"
+        fi
+        
+        # Show log files status
+        ls -la *.log || echo "No log files found"
+        for log in install_output.log start_output.log full_logcat.log app_specific.log error_logs.log; do
+          if [ -f "$log" ]; then
+            echo "$log size: $(wc -l < "$log" || echo 0) lines"
+          fi
+        done
 
     - name: Upload comprehensive test results
       uses: actions/upload-artifact@v4
