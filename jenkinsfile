@@ -1,0 +1,151 @@
+pipeline {
+  agent any
+
+  environment {
+    APK_PATH = 'golden_dataset/KMPWithTests/golden_output/composeApp-debug.apk'
+
+    APP_PACKAGE = 'org.example.kmpwithtests'
+    APP_ACTIVITY = '.MainActivity'
+    // Docker image containing emulator and adb
+    EMULATOR_IMAGE = 'butomo1989/docker-android-x86-8.1' 
+    EMULATOR_CONTAINER = 'android-emulator-test'
+    ADB_HOST_PORT = '5555'
+  }
+
+  stages {
+    stage('Checkout') {
+      steps {
+        checkout scm
+      }
+    }
+
+    stage('Generate Build Files') {
+      steps {
+        script {
+          // Проверяем наличие API ключа
+          if (!env.ANTHROPIC_API_KEY) {
+            error "ANTHROPIC_API_KEY environment variable is required"
+          }
+        }
+        sh """
+          python3 -m pip install --user -r requirements.txt
+          export ANTHROPIC_API_KEY=${env.ANTHROPIC_API_KEY}
+          python3 main.py
+        """
+      }
+    }
+
+    stage('Verify APK exists') {
+      steps {
+        script { 
+          if (!fileExists(env.APK_PATH)) {
+            error "APK not found at ${env.APK_PATH} - build may have failed."
+          }
+          echo "APK found: ${env.APK_PATH}"
+        }
+      }
+    }
+
+    stage('Start emulator (Docker)') {
+      steps {
+        sh """
+          docker rm -f ${EMULATOR_CONTAINER} >/dev/null 2>&1 || true
+          docker run -d --privileged --name ${EMULATOR_CONTAINER} -p ${ADB_HOST_PORT}:5555 \\
+            -e "DEVICE=android-8.1" \\
+            -e "EMULATOR_PARAMS=-no-window -no-audio -gpu swiftshader_indirect" \\
+            ${EMULATOR_IMAGE} || (docker logs ${EMULATOR_CONTAINER} && exit 1)
+        """
+      }
+    }
+
+    stage('Wait for emulator to be ready') {
+      steps {
+        sh """
+          # Join emulator via adb (on localhost:${ADB_HOST_PORT})
+          adb kill-server || true
+          adb start-server
+          n=0
+          until adb connect localhost:${ADB_HOST_PORT} || [ \$n -gt 60 ]; do
+            n=\$((n+1))
+            sleep 1
+          done
+          adb devices
+          # Waiting for BOOT_COMPLETED
+          n=0
+          until [ "\$(adb -s localhost:${ADB_HOST_PORT} shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" = "1" ] || [ \$n -gt 120 ]; do
+            echo "Waiting for emulator boot..."
+            sleep 2
+            n=\$((n+1))
+          done
+          if [ "\$(adb -s localhost:${ADB_HOST_PORT} shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" != "1" ]; then
+            adb -s localhost:${ADB_HOST_PORT} logcat -d | tee emulator-boot-logcat.txt || true
+            docker logs ${EMULATOR_CONTAINER} > emulator-container.log || true
+            echo "Emulator failed to boot"
+            exit 1
+          fi
+          echo "Emulator booted"
+        """
+      }
+    }
+
+    stage('Install APK') {
+      steps {
+        sh """
+          adb -s localhost:${ADB_HOST_PORT} install -r ${APK_PATH} | tee install-output.txt
+        """
+      }
+    }
+
+    stage('Launch app and verify') {
+      steps {
+        sh """
+          # Run the app
+          adb -s localhost:${ADB_HOST_PORT} shell am start -W -n ${APP_PACKAGE}/${APP_ACTIVITY} > am-start-output.txt || true
+          
+          # Check foreground activity
+          sleep 2
+          FOREGROUND=\$(adb -s localhost:${ADB_HOST_PORT} shell dumpsys window windows | grep -E 'mCurrentFocus|mFocusedApp' || true)
+          echo "Foreground check:\\n\$FOREGROUND" | tee foreground.txt
+
+          # Check process PID
+          PID=\$(adb -s localhost:${ADB_HOST_PORT} shell pidof ${APP_PACKAGE} || echo "")
+          echo "PID: \$PID" | tee pid.txt
+
+          # Check am start output (useful: TotalTime)
+          cat am-start-output.txt | tee am-start-output-logged.txt
+
+          # Collect logcat for analysis and explicit error searching
+          adb -s localhost:${ADB_HOST_PORT} logcat -d | tee logcat-after-start.txt || true
+
+          # Success criteria
+          if [ -n "\$PID" ]; then
+            echo "App started (pid \$PID). SUCCESS."
+            exit 0
+          fi
+
+          if echo "\$FOREGROUND" | grep -q "${APP_PACKAGE}"; then
+            echo "App is in foreground. SUCCESS."
+            exit 0
+          fi
+
+          echo "App did not appear to start. FAIL."
+          exit 1
+        """
+      }
+    }
+  }
+
+  post {
+    always {
+      // Collect artifacts and logs
+      archiveArtifacts artifacts: 'install-output.txt,am-start-output.txt,foreground.txt,pid.txt,logcat-after-start.txt,emulator-boot-logcat.txt,emulator-container.log,golden_dataset/KMPWithTests/generated/**', allowEmptyArchive: true
+      sh "docker rm -f ${EMULATOR_CONTAINER} >/dev/null 2>&1 || true"
+    }
+    success {
+      echo 'Smoke test passed: APK installed and app launched.'
+    }
+    failure {
+      echo 'Smoke test failed: смотрите артефакты и логи.'
+    }
+  }
+}
