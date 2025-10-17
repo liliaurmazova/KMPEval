@@ -5,7 +5,7 @@ on:
     branches: [ main ]
   pull_request:
     branches: [ main ]
-  workflow_dispatch:  # Позволяет запускать вручную
+  workflow_dispatch:  
 
 jobs:
   generate-and-test:
@@ -99,15 +99,16 @@ jobs:
           
           echo "=== Android Emulator Test Started ==="
           
-          # Проверяем состояние эмулятора
+          # Check emulator status
+          echo "📱 Checking emulator status..."
           adb devices
           adb shell getprop sys.boot_completed
           
-          # Устанавливаем APK
+          # Install APK
           echo "📱 Installing APK: $APK_PATH"
           adb install -r "$APK_PATH"
           
-          # Проверяем установку
+          # Verify installation
           if adb shell pm list packages | grep -q "org.example.kmpwithtests"; then
             echo "✅ Package installed successfully"
           else
@@ -115,14 +116,14 @@ jobs:
             exit 1
           fi
           
-          # Запускаем приложение
+          # App launch
           echo "🚀 Starting application..."
           adb shell am start -W -n org.example.kmpwithtests/.MainActivity
           
-          # Ждем запуска
+          # Wait for launch
           sleep 3
           
-          # Проверяем процесс
+          # Check process
           PID=$(adb shell pidof org.example.kmpwithtests || echo "")
           if [ -n "$PID" ]; then
             echo "✅ App is running with PID: $PID"
@@ -130,20 +131,20 @@ jobs:
             echo "❌ App process not found"
           fi
           
-          # Проверяем активное окно
+          # Check active window
           CURRENT_FOCUS=$(adb shell dumpsys window windows | grep -E "mCurrentFocus" || echo "none")
           echo "🔍 Current focus: $CURRENT_FOCUS"
           
-          # Собираем логи
+          # Collect logs
           echo "📋 Collecting logcat logs..."
           adb logcat -d -s "AndroidRuntime:E" -s "System.err:E" > app_errors.log || true
           adb logcat -d | grep "kmpwithtests" > app_logs.log || true
           
-          # Финальная проверка успеха
+          # Final success check
           if [ -n "$PID" ]; then
             echo "🎉 SUCCESS: App installed and started successfully!"
-            
-            # Дополнительные проверки
+
+            # Additional checks
             echo "📊 Additional checks:"
             adb shell dumpsys meminfo org.example.kmpwithtests | head -10 || true
             adb shell dumpsys activity activities | grep -A5 "org.example.kmpwithtests" || true

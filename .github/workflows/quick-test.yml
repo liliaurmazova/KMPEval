@@ -1,7 +1,7 @@
 name: Quick Build Test
 
 on:
-  workflow_dispatch:  # Только ручной запуск
+  workflow_dispatch: 
   
 jobs:
   quick-test:

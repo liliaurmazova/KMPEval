@@ -1,7 +1,7 @@
 name: Android APK Test Only
 
 on:
-  workflow_dispatch:  # Только ручной запуск
+  workflow_dispatch:  
     inputs:
       apk_path:
         description: 'Path to APK file'
@@ -31,11 +31,19 @@ jobs:
           echo "✅ APK found: $APK_PATH"
           ls -lh "$APK_PATH"
           
-          # Дополнительная информация об APK
+          # Additional APK information
+          echo "APK details:"
           file "$APK_PATH"
           echo ""
-          
-          # Попытка получить информации об APK через aapt (если доступен)
+
+          # Attempt to get APK information via aapt (if available)
+          if command -v aapt &> /dev/null; then
+            echo "APK information (via aapt):"
+            aapt dump badging "$APK_PATH" || echo "Failed to get APK information"
+          else
+            echo "aapt not found, skipping APK information extraction"
+          fi
+
           echo "APK_PATH=$APK_PATH" >> $GITHUB_ENV
           echo "PACKAGE_NAME=${{ github.event.inputs.package_name }}" >> $GITHUB_ENV
           echo "MAIN_ACTIVITY=${{ github.event.inputs.main_activity }}" >> $GITHUB_ENV
@@ -92,17 +100,17 @@ jobs:
           echo "Activity: $MAIN_ACTIVITY"
           echo ""
           
-          # 1. Проверка состояния эмулятора
+          # 1. Emulator status check
           echo "📱 Checking emulator status..."
           adb devices
           adb shell getprop ro.build.version.release
           adb shell getprop sys.boot_completed
           echo ""
           
-          # 2. Очистка логов
+          # 2. Logcat cleanup
           adb logcat -c
           
-          # 3. Установка APK
+          # 3. APK installation
           echo "📦 Installing APK..."
           adb install -r "$APK_PATH" 2>&1 | tee install_output.log
           
@@ -114,7 +122,7 @@ jobs:
             exit 1
           fi
           
-          # 4. Проверка установленного пакета
+          # 4. Package verification
           echo "🔍 Verifying package installation..."
           if adb shell pm list packages | grep -q "$PACKAGE_NAME"; then
             echo "✅ Package found in installed packages"
@@ -126,11 +134,11 @@ jobs:
             exit 1
           fi
           
-          # 5. Запуск приложения
+          # 5. App launch
           echo "🚀 Starting application..."
           adb shell am start -W -n "${PACKAGE_NAME}${MAIN_ACTIVITY}" 2>&1 | tee start_output.log
           
-          # 6. Проверка запуска (несколько попыток)
+          # 6. Launch verification (multiple attempts)
           echo "⏳ Waiting for app to start..."
           for i in {1..10}; do
             sleep 1
@@ -143,12 +151,12 @@ jobs:
             fi
           done
           
-          # 7. Финальная проверка процесса
+          # 7. Final process check
           FINAL_PID=$(adb shell pidof "$PACKAGE_NAME" 2>/dev/null || echo "")
           if [ -n "$FINAL_PID" ]; then
             echo "✅ SUCCESS: App is running with PID: $FINAL_PID"
             
-            # Дополнительная диагностика
+            # Additional diagnostics
             echo ""
             echo "📊 App diagnostics:"
             echo "Memory info:"
@@ -162,8 +170,8 @@ jobs:
             
           else
             echo "❌ FAILURE: App did not start or crashed"
-            
-            # Диагностика ошибок
+
+            # Error diagnostics
             echo ""
             echo "🔍 Troubleshooting:"
             echo "Start output:"
@@ -178,7 +186,7 @@ jobs:
             exit 1
           fi
           
-          # 8. Сбор финальных логов
+          # 8. Final log collection
           echo "📋 Collecting logs..."
           adb logcat -d > full_logcat.log
           adb logcat -d | grep "$PACKAGE_NAME" > app_specific.log
