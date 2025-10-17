@@ -55,4 +55,5 @@ jobs:
         path: |
           golden_dataset/KMPWithTests/generated/
           *.log
+        if-no-files-found: ignore
       if: always()

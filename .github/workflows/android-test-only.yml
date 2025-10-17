@@ -205,3 +205,4 @@ jobs:
           full_logcat.log
           app_specific.log
           error_logs.log
+        if-no-files-found: ignore
