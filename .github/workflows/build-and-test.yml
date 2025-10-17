@@ -43,26 +43,130 @@ jobs:
         java-version: '17'
         distribution: 'temurin'
         
-    # Пока закомментируем Android тест, сначала проверим генерацию
-    # - name: Set up Android SDK
-    #   uses: android-actions/setup-android@v3
-    #   
-    # - name: Run Android Emulator and test APK
-    #   uses: reactivecircus/android-emulator-runner@v2
-    #   with:
-    #     api-level: 33
-    #     arch: x86_64
-    #     script: |
-    #       if [ -f "golden_dataset/KMPWithTests/golden_output/composeApp-debug.apk" ]; then
-    #         adb install golden_dataset/KMPWithTests/golden_output/composeApp-debug.apk
-    #         adb shell am start -n org.example.kmpwithtests/.MainActivity
-    #         sleep 5
-    #         adb shell pidof org.example.kmpwithtests && echo "App started successfully" || echo "App failed to start"
-    #       else
-    #         echo "APK not found, skipping install test"
-    #       fi
+    - name: Verify APK exists
+      run: |
+        APK_PATH="golden_dataset/KMPWithTests/golden_output/composeApp-debug.apk"
+        if [ -f "$APK_PATH" ]; then
+          echo "✅ APK found: $APK_PATH"
+          ls -lh "$APK_PATH"
+          echo "APK_PATH=$APK_PATH" >> $GITHUB_ENV
+        else
+          echo "❌ APK not found at $APK_PATH"
+          echo "Available files in golden_output:"
+          find golden_dataset/KMPWithTests/golden_output -name "*.apk" || echo "No APK files found"
+          exit 1
+        fi
+
+    - name: Enable KVM group perms
+      run: |
+        echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+        sudo udevadm control --reload-rules
+        sudo udevadm trigger --name-match=kvm
+
+    - name: Set up Android SDK
+      uses: android-actions/setup-android@v3
+
+    - name: AVD cache
+      uses: actions/cache@v3
+      id: avd-cache
+      with:
+        path: |
+          ~/.android/avd/*
+          ~/.android/adb*
+        key: avd-33
+
+    - name: Create AVD and generate snapshot for caching
+      if: steps.avd-cache.outputs.cache-hit != 'true'
+      uses: reactivecircus/android-emulator-runner@v2
+      with:
+        api-level: 33
+        arch: x86_64
+        force-avd-creation: false
+        emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
+        disable-animations: false
+        script: echo "Generated AVD snapshot for caching."
+
+    - name: Run Android Emulator and test APK
+      uses: reactivecircus/android-emulator-runner@v2
+      with:
+        api-level: 33
+        arch: x86_64
+        force-avd-creation: false
+        emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
+        disable-animations: true
+        script: |
+          set -e
+          
+          echo "=== Android Emulator Test Started ==="
+          
+          # Проверяем состояние эмулятора
+          adb devices
+          adb shell getprop sys.boot_completed
+          
+          # Устанавливаем APK
+          echo "📱 Installing APK: $APK_PATH"
+          adb install -r "$APK_PATH"
+          
+          # Проверяем установку
+          if adb shell pm list packages | grep -q "org.example.kmpwithtests"; then
+            echo "✅ Package installed successfully"
+          else
+            echo "❌ Package installation failed"
+            exit 1
+          fi
+          
+          # Запускаем приложение
+          echo "🚀 Starting application..."
+          adb shell am start -W -n org.example.kmpwithtests/.MainActivity
+          
+          # Ждем запуска
+          sleep 3
+          
+          # Проверяем процесс
+          PID=$(adb shell pidof org.example.kmpwithtests || echo "")
+          if [ -n "$PID" ]; then
+            echo "✅ App is running with PID: $PID"
+          else
+            echo "❌ App process not found"
+          fi
+          
+          # Проверяем активное окно
+          CURRENT_FOCUS=$(adb shell dumpsys window windows | grep -E "mCurrentFocus" || echo "none")
+          echo "🔍 Current focus: $CURRENT_FOCUS"
+          
+          # Собираем логи
+          echo "📋 Collecting logcat logs..."
+          adb logcat -d -s "AndroidRuntime:E" -s "System.err:E" > app_errors.log || true
+          adb logcat -d | grep "kmpwithtests" > app_logs.log || true
+          
+          # Финальная проверка успеха
+          if [ -n "$PID" ]; then
+            echo "🎉 SUCCESS: App installed and started successfully!"
+            
+            # Дополнительные проверки
+            echo "📊 Additional checks:"
+            adb shell dumpsys meminfo org.example.kmpwithtests | head -10 || true
+            adb shell dumpsys activity activities | grep -A5 "org.example.kmpwithtests" || true
+            
+            exit 0
+          else
+            echo "💥 FAILURE: App did not start properly"
+            echo "--- Error logs ---"
+            cat app_errors.log || echo "No error logs"
+            exit 1
+          fi
         
+    - name: Upload Android test logs
+      uses: actions/upload-artifact@v3
+      if: always()
+      with:
+        name: android-test-logs
+        path: |
+          app_errors.log
+          app_logs.log
+          
     - name: Display results
+      if: always()
       run: |
         echo "=== Build file generation completed ==="
         if [ -d "golden_dataset/KMPWithTests/generated" ]; then
@@ -73,5 +177,13 @@ jobs:
           find golden_dataset/KMPWithTests/generated -type f \( -name "*.kts" -o -name "*.gradle" \) -exec ls -lh {} \; | head -5
         else
           echo "No generated files found!"
-          exit 1
+        fi
+        
+        echo ""
+        echo "=== Android test summary ==="
+        if [ -f "app_errors.log" ]; then
+          echo "Error log size: $(wc -l < app_errors.log) lines"
+        fi
+        if [ -f "app_logs.log" ]; then
+          echo "App log size: $(wc -l < app_logs.log) lines"
         fi

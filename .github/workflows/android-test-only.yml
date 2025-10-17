@@ -1,0 +1,199 @@
+name: Android APK Test Only
+
+on:
+  workflow_dispatch:  # Только ручной запуск
+    inputs:
+      apk_path:
+        description: 'Path to APK file'
+        required: false
+        default: 'golden_dataset/KMPWithTests/golden_output/composeApp-debug.apk'
+      package_name:
+        description: 'Android package name'
+        required: false
+        default: 'org.example.kmpwithtests'
+      main_activity:
+        description: 'Main activity class'
+        required: false
+        default: '.MainActivity'
+
+jobs:
+  test-android-apk:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Verify APK exists
+      run: |
+        APK_PATH="${{ github.event.inputs.apk_path }}"
+        if [ -f "$APK_PATH" ]; then
+          echo "✅ APK found: $APK_PATH"
+          ls -lh "$APK_PATH"
+          
+          # Дополнительная информация об APK
+          file "$APK_PATH"
+          echo ""
+          
+          # Попытка получить информации об APK через aapt (если доступен)
+          echo "APK_PATH=$APK_PATH" >> $GITHUB_ENV
+          echo "PACKAGE_NAME=${{ github.event.inputs.package_name }}" >> $GITHUB_ENV
+          echo "MAIN_ACTIVITY=${{ github.event.inputs.main_activity }}" >> $GITHUB_ENV
+        else
+          echo "❌ APK not found at $APK_PATH"
+          echo "Available files:"
+          find . -name "*.apk" -type f 2>/dev/null || echo "No APK files found in workspace"
+          exit 1
+        fi
+
+    - name: Enable KVM group perms
+      run: |
+        echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+        sudo udevadm control --reload-rules
+        sudo udevadm trigger --name-match=kvm
+
+    - name: Set up Android SDK
+      uses: android-actions/setup-android@v3
+
+    - name: AVD cache
+      uses: actions/cache@v3
+      id: avd-cache
+      with:
+        path: |
+          ~/.android/avd/*
+          ~/.android/adb*
+        key: avd-33-test
+
+    - name: Create AVD and generate snapshot for caching
+      if: steps.avd-cache.outputs.cache-hit != 'true'
+      uses: reactivecircus/android-emulator-runner@v2
+      with:
+        api-level: 33
+        arch: x86_64
+        force-avd-creation: false
+        emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
+        disable-animations: false
+        script: echo "Generated AVD snapshot for caching."
+
+    - name: Run comprehensive APK test
+      uses: reactivecircus/android-emulator-runner@v2
+      with:
+        api-level: 33
+        arch: x86_64
+        force-avd-creation: false
+        emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
+        disable-animations: true
+        script: |
+          set -e
+          
+          echo "🚀 === Comprehensive Android APK Test ==="
+          echo "APK: $APK_PATH"
+          echo "Package: $PACKAGE_NAME"
+          echo "Activity: $MAIN_ACTIVITY"
+          echo ""
+          
+          # 1. Проверка состояния эмулятора
+          echo "📱 Checking emulator status..."
+          adb devices
+          adb shell getprop ro.build.version.release
+          adb shell getprop sys.boot_completed
+          echo ""
+          
+          # 2. Очистка логов
+          adb logcat -c
+          
+          # 3. Установка APK
+          echo "📦 Installing APK..."
+          adb install -r "$APK_PATH" 2>&1 | tee install_output.log
+          
+          if grep -q "Success" install_output.log; then
+            echo "✅ Installation successful"
+          else
+            echo "❌ Installation failed"
+            cat install_output.log
+            exit 1
+          fi
+          
+          # 4. Проверка установленного пакета
+          echo "🔍 Verifying package installation..."
+          if adb shell pm list packages | grep -q "$PACKAGE_NAME"; then
+            echo "✅ Package found in installed packages"
+            adb shell pm dump "$PACKAGE_NAME" | head -20
+          else
+            echo "❌ Package not found in installed packages"
+            echo "Installed packages:"
+            adb shell pm list packages | head -10
+            exit 1
+          fi
+          
+          # 5. Запуск приложения
+          echo "🚀 Starting application..."
+          adb shell am start -W -n "${PACKAGE_NAME}${MAIN_ACTIVITY}" 2>&1 | tee start_output.log
+          
+          # 6. Проверка запуска (несколько попыток)
+          echo "⏳ Waiting for app to start..."
+          for i in {1..10}; do
+            sleep 1
+            PID=$(adb shell pidof "$PACKAGE_NAME" 2>/dev/null || echo "")
+            if [ -n "$PID" ]; then
+              echo "✅ App started with PID: $PID (attempt $i)"
+              break
+            else
+              echo "⏳ Waiting for app... (attempt $i/10)"
+            fi
+          done
+          
+          # 7. Финальная проверка процесса
+          FINAL_PID=$(adb shell pidof "$PACKAGE_NAME" 2>/dev/null || echo "")
+          if [ -n "$FINAL_PID" ]; then
+            echo "✅ SUCCESS: App is running with PID: $FINAL_PID"
+            
+            # Дополнительная диагностика
+            echo ""
+            echo "📊 App diagnostics:"
+            echo "Memory info:"
+            adb shell dumpsys meminfo "$PACKAGE_NAME" | head -10 || true
+            echo ""
+            echo "Activity stack:"
+            adb shell dumpsys activity activities | grep -A10 "$PACKAGE_NAME" || true
+            echo ""
+            echo "Current focus:"
+            adb shell dumpsys window windows | grep -E "mCurrentFocus|mFocusedApp" || true
+            
+          else
+            echo "❌ FAILURE: App did not start or crashed"
+            
+            # Диагностика ошибок
+            echo ""
+            echo "🔍 Troubleshooting:"
+            echo "Start output:"
+            cat start_output.log || true
+            echo ""
+            echo "Recent logcat errors:"
+            adb logcat -d -s "AndroidRuntime:E" | tail -20 || true
+            echo ""
+            echo "App-specific logs:"
+            adb logcat -d | grep "$PACKAGE_NAME" | tail -10 || true
+            
+            exit 1
+          fi
+          
+          # 8. Сбор финальных логов
+          echo "📋 Collecting logs..."
+          adb logcat -d > full_logcat.log
+          adb logcat -d | grep "$PACKAGE_NAME" > app_specific.log
+          adb logcat -d -s "AndroidRuntime:E" -s "System.err:E" > error_logs.log
+          
+          echo "🎉 Test completed successfully!"
+
+    - name: Upload comprehensive test results
+      uses: actions/upload-artifact@v3
+      if: always()
+      with:
+        name: android-apk-test-results
+        path: |
+          install_output.log
+          start_output.log
+          full_logcat.log
+          app_specific.log
+          error_logs.log
