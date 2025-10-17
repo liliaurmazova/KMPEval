@@ -1,0 +1,77 @@
+name: KMP Build and Test
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:  # Позволяет запускать вручную
+
+jobs:
+  generate-and-test:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+        
+    - name: Install Python dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        
+    - name: Generate build files
+      env:
+        ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      run: |
+        python main.py
+        
+    - name: Upload generated files
+      uses: actions/upload-artifact@v3
+      with:
+        name: generated-build-files
+        path: golden_dataset/KMPWithTests/generated/
+        
+    - name: Set up JDK 17
+      uses: actions/setup-java@v4
+      with:
+        java-version: '17'
+        distribution: 'temurin'
+        
+    # Пока закомментируем Android тест, сначала проверим генерацию
+    # - name: Set up Android SDK
+    #   uses: android-actions/setup-android@v3
+    #   
+    # - name: Run Android Emulator and test APK
+    #   uses: reactivecircus/android-emulator-runner@v2
+    #   with:
+    #     api-level: 33
+    #     arch: x86_64
+    #     script: |
+    #       if [ -f "golden_dataset/KMPWithTests/golden_output/composeApp-debug.apk" ]; then
+    #         adb install golden_dataset/KMPWithTests/golden_output/composeApp-debug.apk
+    #         adb shell am start -n org.example.kmpwithtests/.MainActivity
+    #         sleep 5
+    #         adb shell pidof org.example.kmpwithtests && echo "App started successfully" || echo "App failed to start"
+    #       else
+    #         echo "APK not found, skipping install test"
+    #       fi
+        
+    - name: Display results
+      run: |
+        echo "=== Build file generation completed ==="
+        if [ -d "golden_dataset/KMPWithTests/generated" ]; then
+          echo "Generated files:"
+          find golden_dataset/KMPWithTests/generated -type f -name "*.kts" -o -name "*.gradle" | head -10
+          echo ""
+          echo "File sizes:"
+          find golden_dataset/KMPWithTests/generated -type f \( -name "*.kts" -o -name "*.gradle" \) -exec ls -lh {} \; | head -5
+        else
+          echo "No generated files found!"
+          exit 1
+        fi

@@ -1,0 +1,58 @@
+name: Quick Build Test
+
+on:
+  workflow_dispatch:  # Только ручной запуск
+  
+jobs:
+  quick-test:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+        
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        
+    - name: Test without API (dry run)
+      run: |
+        echo "Testing project structure..."
+        ls -la
+        echo "Testing Python imports..."
+        python -c "from evaluators.model_evaluator import compare_results; print('Imports work!')"
+        echo "Testing file paths..."
+        python -c "
+        import os
+        from config.constants import GOLDEN_DATASET_PATH, GENERATED_OUTPUT_PATH
+        print(f'Golden path: {GOLDEN_DATASET_PATH}')
+        print(f'Generated path: {GENERATED_OUTPUT_PATH}')
+        print(f'Golden path exists: {os.path.exists(GOLDEN_DATASET_PATH)}')
+        "
+        
+    - name: Generate build files (if API key provided)
+      env:
+        ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      run: |
+        if [ -n "$ANTHROPIC_API_KEY" ]; then
+          echo "API key found, running generation..."
+          python main.py
+        else
+          echo "No API key provided, skipping generation"
+          echo "To enable generation, add ANTHROPIC_API_KEY to repository secrets"
+        fi
+        
+    - name: Upload results
+      uses: actions/upload-artifact@v3
+      with:
+        name: test-results
+        path: |
+          golden_dataset/KMPWithTests/generated/
+          *.log
+      if: always()
