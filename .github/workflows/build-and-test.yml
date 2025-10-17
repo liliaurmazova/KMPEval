@@ -135,10 +135,14 @@ jobs:
           CURRENT_FOCUS=$(adb shell dumpsys window windows | grep -E "mCurrentFocus" || echo "none")
           echo "🔍 Current focus: $CURRENT_FOCUS"
           
-          # Collect logs
+          # Collect logs and copy to workspace
           echo "📋 Collecting logcat logs..."
-          adb logcat -d -s "AndroidRuntime:E" -s "System.err:E" > app_errors.log || true
-          adb logcat -d | grep "kmpwithtests" > app_logs.log || true
+          adb logcat -d -s "AndroidRuntime:E" -s "System.err:E" > /tmp/app_errors.log || true
+          adb logcat -d | grep "kmpwithtests" > /tmp/app_logs.log || true
+          
+          # Copy logs to workspace for artifacts (outside emulator context)
+          cp /tmp/app_errors.log $GITHUB_WORKSPACE/app_errors.log || touch $GITHUB_WORKSPACE/app_errors.log
+          cp /tmp/app_logs.log $GITHUB_WORKSPACE/app_logs.log || touch $GITHUB_WORKSPACE/app_logs.log
           
           # Final success check
           if [ -n "$PID" ]; then
@@ -153,7 +157,7 @@ jobs:
           else
             echo "💥 FAILURE: App did not start properly"
             echo "--- Error logs ---"
-            cat app_errors.log || echo "No error logs"
+            cat /tmp/app_errors.log || echo "No error logs"
             exit 1
           fi
         
@@ -165,6 +169,7 @@ jobs:
         path: |
           app_errors.log
           app_logs.log
+        if-no-files-found: ignore
           
     - name: Display results
       if: always()
