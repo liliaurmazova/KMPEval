@@ -28,4 +28,4 @@ dependencyResolutionManagement {
     }
 }
 
-include(":composeApp")
+// Note: composeApp subproject not included in golden_output for isolated testing
